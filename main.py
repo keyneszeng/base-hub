@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 import database as db
 from data_fetcher import fetch_all_projects_gas_data
 from mock_data import generate_historical_gas_data, generate_aggregated_stats
+from onchain import OnChainFetcher
 
 load_dotenv()
 
@@ -34,8 +35,25 @@ cache = {
     "daily_rankings": [],
     "snapshots": [],
     "last_update": None,
-    "data_source": "mock" if USE_MOCK else "basescan",
+    "data_source": "mock",
+    "network_stats": {},
 }
+
+# 链上数据获取器（懒加载，线程安全）
+_onchain = None
+_onchain_lock = False
+def get_onchain():
+    global _onchain, _onchain_lock
+    if _onchain is not None:
+        return _onchain
+    if _onchain_lock:
+        return None  # 正在初始化中
+    _onchain_lock = True
+    try:
+        _onchain = OnChainFetcher()
+    except Exception as e:
+        print(f"⚠️  RPC 初始化失败: {e}")
+    return _onchain
 
 
 @asynccontextmanager
@@ -62,10 +80,22 @@ async def lifespan(app: FastAPI):
 
 async def initial_data_load():
     """初始数据加载"""
-    if USE_MOCK:
-        await load_mock_data()
-    else:
-        await fetch_live_data()
+    # 先用模拟数据快速启动
+    await load_mock_data()
+    print("✅ 模拟数据已加载，服务已就绪")
+    
+    # 后台尝试链上数据
+    async def try_onchain():
+        try:
+            await asyncio.sleep(3)  # 等服务器完全启动
+            oc = get_onchain()
+            if oc and oc.is_connected():
+                print("🔗 Base 主网 RPC 已连接，开始获取实时数据...")
+                await fetch_onchain_data()
+        except Exception as e:
+            print(f"ℹ️  链上数据获取跳过: {e}")
+    
+    asyncio.create_task(try_onchain())
 
 
 async def periodic_data_fetch():
@@ -73,14 +103,50 @@ async def periodic_data_fetch():
     while True:
         await asyncio.sleep(300)  # 5分钟
         try:
-            if USE_MOCK:
-                # 模拟数据定时刷新（添加随机波动）
-                await load_mock_data()
+            # 尝试链上数据
+            oc = get_onchain()
+            if oc.is_connected():
+                await fetch_onchain_data()
             else:
-                await fetch_live_data()
+                # 回退到模拟数据
+                await load_mock_data()
             print(f"[{datetime.now()}] 数据更新完成")
         except Exception as e:
             print(f"数据更新失败：{e}")
+
+
+async def fetch_onchain_data():
+    """从 Base 主网获取实时链上数据"""
+    global cache
+    
+    oc = get_onchain()
+    if not oc.is_connected():
+        print("⚠️  Base 主网 RPC 不可用，使用模拟数据")
+        await load_mock_data()
+        return
+    
+    print(f"🔗 正在从 Base 主网获取实时数据...")
+    
+    # 扫描最近 20 个区块（首次快速扫描）
+    onchain_stats = oc.scan_blocks(count=20)
+    
+    # 保存到数据库
+    for stat in onchain_stats:
+        await db.update_gas_stats(stat)
+    
+    # 更新缓存
+    cache["total_rankings"] = onchain_stats
+    cache["daily_rankings"] = onchain_stats
+    cache["snapshots"] = await db.get_daily_snapshots(30)
+    
+    # 获取网络概览
+    cache["network_stats"] = oc.get_network_overview(count=30)
+    
+    cache["last_update"] = datetime.now()
+    cache["data_source"] = "onchain"
+    
+    top5 = ", ".join(s["contract_label"] for s in onchain_stats[:5])
+    print(f"✅ 链上数据已更新: {len(onchain_stats)} 个合约, Top: {top5}")
 
 
 async def load_mock_data():
@@ -225,10 +291,11 @@ async def get_gas_by_category():
 async def trigger_fetch():
     """手动触发数据获取"""
     try:
-        if USE_MOCK:
-            await load_mock_data()
+        oc = get_onchain()
+        if oc.is_connected():
+            await fetch_onchain_data()
         else:
-            await fetch_live_data()
+            await load_mock_data()
         return {
             "status": "success",
             "message": "数据获取完成",
@@ -241,14 +308,26 @@ async def trigger_fetch():
 @app.get("/api/status")
 async def get_status():
     """获取服务状态"""
+    oc = get_onchain()
     return {
         "status": "running",
         "last_update": cache["last_update"].isoformat() if cache["last_update"] else None,
         "total_rankings_count": len(cache["total_rankings"]),
         "daily_rankings_count": len(cache["daily_rankings"]),
         "data_source": cache["data_source"],
-        "mock_data": USE_MOCK,
+        "base_rpc_connected": oc.is_connected(),
     }
+
+
+@app.get("/api/network/stats")
+async def get_network_stats():
+    """获取 Base 主网状态概览"""
+    if cache["network_stats"]:
+        return cache["network_stats"]
+    oc = get_onchain()
+    stats = oc.get_network_overview(count=50)
+    cache["network_stats"] = stats
+    return stats
 
 
 if __name__ == "__main__":
@@ -258,9 +337,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 8002))
     
     print(f"🚀 Base Gas Dashboard 启动中...")
-    print(f"📊 数据模式: {'模拟数据' if USE_MOCK else 'Basescan 实时数据'}")
-    if USE_MOCK:
-        print(f"💡 提示: 配置 BASESCAN_API_KEY 后重启即可使用真实数据")
+    print(f"🔗 数据源: 自动检测 (Base 主网 RPC > 模拟数据)")
     print(f"🌐 访问地址: http://localhost:{port}")
     
     uvicorn.run(app, host=host, port=port)
