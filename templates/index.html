@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Base 生态 Gas 消耗看板</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        base: { blue: '#0052FF', dark: '#0A0B0D', gray: '#1C1F26' }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #0A0B0D; min-height: 100vh; color: #fff; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        .gradient-bg { background: linear-gradient(135deg, #0A0B0D 0%, #1C1F26 50%, #0A0B0D 100%); }
+        .card { background: #1C1F26; border-radius: 16px; border: 1px solid #2a2d35; transition: all 0.3s ease; }
+        .card:hover { border-color: #0052FF; box-shadow: 0 0 30px rgba(0,82,255,0.1); }
+        .rank-badge { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; flex-shrink: 0; }
+        .rank-1 { background: linear-gradient(135deg, #FFD700, #FFA500); color: #1a1a1a; }
+        .rank-2 { background: linear-gradient(135deg, #C0C0C0, #A8A8A8); color: #1a1a1a; }
+        .rank-3 { background: linear-gradient(135deg, #CD7F32, #B8860B); color: #fff; }
+        .rank-n { background: #2a2d35; color: #666; }
+        .gas-bar { height: 6px; border-radius: 3px; background: linear-gradient(90deg, #0052FF, #00A3FF); transition: width 1s ease; }
+        .gas-bar-bg { background: #2a2d35; border-radius: 3px; height: 6px; }
+        .category-badge { padding: 2px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+        @keyframes fadeInUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        .fade-in { animation: fadeInUp 0.5s ease forwards; }
+        .fade-in:nth-child(1) { animation-delay: 0.05s; }
+        .fade-in:nth-child(2) { animation-delay: 0.1s; }
+        .fade-in:nth-child(3) { animation-delay: 0.15s; }
+        .fade-in:nth-child(4) { animation-delay: 0.2s; }
+        .loader { width: 40px; height: 40px; border: 3px solid #2a2d35; border-top-color: #0052FF; border-radius: 50%; animation: spin 0.8s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .gas-value { font-family: 'SF Mono', 'Fira Code', monospace; }
+        @media (max-width: 640px) { .card { border-radius: 12px; } }
+    </style>
+</head>
+<body class="gradient-bg" x-data="dashboard()" x-init="init()">
+    <!-- 顶部导航 -->
+    <nav class="sticky top-0 z-50 bg-[#0A0B0D]/95 backdrop-blur-xl border-b border-[#2a2d35]">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <div class="w-9 h-9 bg-gradient-to-br from-base-blue to-blue-400 rounded-xl flex items-center justify-center shadow-lg shadow-base-blue/20">
+                    <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+                    </svg>
+                </div>
+                <div>
+                    <h1 class="text-lg font-bold">Base 生态 Gas 看板</h1>
+                    <p class="text-xs text-gray-500" x-text="dataSource"></p>
+                </div>
+            </div>
+            <div class="flex items-center gap-3">
+                <span class="hidden sm:inline text-xs text-gray-400" x-text="'更新于 ' + lastUpdate"></span>
+                <button @click="refreshData()" :disabled="loading"
+                        class="px-4 py-2 bg-base-blue hover:bg-blue-600 disabled:opacity-50 rounded-lg text-sm font-medium transition-all flex items-center gap-2">
+                    <svg class="w-4 h-4" :class="{'animate-spin': loading}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                    </svg>
+                    <span x-text="loading ? '刷新中...' : '刷新'"></span>
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- 主体 -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <!-- 统计卡片 -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <template x-for="(stat, key) in statCards" :key="key">
+                <div class="card p-4 sm:p-5 fade-in">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-xs sm:text-sm text-gray-400" x-text="stat.label"></span>
+                        <div class="w-8 h-8 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center" :style="`background: ${stat.bg}`">
+                            <svg class="w-4 h-4 sm:w-5 sm:h-5" :style="`color: ${stat.color}`" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" :d="stat.icon"/>
+                            </svg>
+                        </div>
+                    </div>
+                    <p class="text-xl sm:text-2xl font-bold gas-value" x-text="formatNumber(stat.value)">0</p>
+                </div>
+            </template>
+        </div>
+
+        <!-- 类别统计 -->
+        <div class="card p-4 sm:p-5 mb-6 fade-in">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-sm font-semibold text-gray-300">📊 类别分布</h3>
+            </div>
+            <div class="flex flex-wrap gap-2" x-show="!loading">
+                <template x-for="cat in categoryStats" :key="cat.category">
+                    <div class="category-badge" :style="`background: ${getCategoryColor(cat.category)}20; color: ${getCategoryColor(cat.category)}; border: 1px solid ${getCategoryColor(cat.category)}40`">
+                        <span x-text="cat.category"></span>
+                        <span class="ml-1 opacity-70" x-text="cat.count + '个'"></span>
+                    </div>
+                </template>
+            </div>
+        </div>
+
+        <!-- 排行榜 + 趋势图 -->
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-6 mb-6">
+            <!-- 总 Gas 消耗排行榜 -->
+            <div class="card p-4 sm:p-5 fade-in">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-sm font-semibold">🏆 总 Gas 消耗排行榜</h3>
+                    <span class="text-xs text-gray-500">所有时间</span>
+                </div>
+
+                <div x-show="loading" class="flex justify-center py-12">
+                    <div class="loader"></div>
+                </div>
+
+                <div x-show="!loading" class="space-y-3">
+                    <template x-for="(item, idx) in totalRankings" :key="item.contract_address">
+                        <div class="flex items-center gap-3 p-2.5 rounded-xl hover:bg-white/5 transition-colors">
+                            <div class="rank-badge" :class="idx < 3 ? 'rank-' + (idx + 1) : 'rank-n'" x-text="idx + 1"></div>
+                            <div class="flex-1 min-w-0">
+                                <div class="flex items-center gap-2">
+                                    <span class="text-sm font-medium truncate" x-text="item.contract_label || item.contract_address.slice(0,10)"></span>
+                                    <span v-if="item.category" class="category-badge hidden sm:inline" :style="`background: ${getCategoryColor(item.category)}20; color: ${getCategoryColor(item.category)}`" x-text="item.category"></span>
+                                </div>
+                                <a :href="'https://basescan.org/address/' + item.contract_address" target="_blank" class="text-xs text-gray-500 hover:text-base-blue truncate block" x-text="item.contract_address"></a>
+                            </div>
+                            <div class="text-right flex-shrink-0">
+                                <p class="text-sm font-semibold gas-value text-blue-400" x-text="formatNumber(item.total_gas_used)"></p>
+                                <p class="text-xs text-gray-500" x-text="formatNumber(item.total_tx_count) + ' txs'"></p>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+
+                <div x-show="!loading && totalRankings.length === 0" class="text-center py-12 text-gray-400">
+                    暂无数据
+                </div>
+            </div>
+
+            <!-- 每日 Gas 消耗排行榜 -->
+            <div class="card p-4 sm:p-5 fade-in">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-sm font-semibold">📈 每日 Gas 消耗榜</h3>
+                    <span class="text-xs text-gray-500" x-text="currentDate">昨日</span>
+                </div>
+
+                <div x-show="loading" class="flex justify-center py-12">
+                    <div class="loader"></div>
+                </div>
+
+                <div x-show="!loading" class="space-y-3">
+                    <template x-for="(item, idx) in dailyRankings" :key="item.contract_address">
+                        <div class="flex items-center gap-3 p-2.5 rounded-xl hover:bg-white/5 transition-colors">
+                            <div class="rank-badge rank-n" x-text="idx + 1"></div>
+                            <div class="flex-1 min-w-0">
+                                <div class="flex items-center gap-2">
+                                    <span class="text-sm font-medium truncate" x-text="item.contract_label || item.contract_address.slice(0,10)"></span>
+                                    <span v-if="item.category" class="category-badge hidden sm:inline" :style="`background: ${getCategoryColor(item.category)}20; color: ${getCategoryColor(item.category)}`" x-text="item.category"></span>
+                                </div>
+                                <a :href="'https://basescan.org/address/' + item.contract_address" target="_blank" class="text-xs text-gray-500 hover:text-base-blue truncate block" x-text="item.contract_address"></a>
+                            </div>
+                            <div class="text-right flex-shrink-0">
+                                <p class="text-sm font-semibold gas-value text-emerald-400" x-text="formatNumber(item.daily_gas_used)"></p>
+                                <p class="text-xs text-gray-500" x-text="formatNumber(item.daily_tx_count) + ' txs'"></p>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+
+                <div x-show="!loading && dailyRankings.length === 0" class="text-center py-12 text-gray-400">
+                    暂无数据
+                </div>
+            </div>
+        </div>
+
+        <!-- Gas 消耗趋势图 -->
+        <div class="card p-4 sm:p-5 mb-6 fade-in">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-sm font-semibold">📊 Gas 消耗趋势</h3>
+                <div class="flex items-center gap-2 text-xs text-gray-400">
+                    <span x-text="trendRange"></span>
+                </div>
+            </div>
+            <div class="relative" style="height: 300px;">
+                <canvas id="trendChart"></canvas>
+            </div>
+            <div x-show="!trendLoaded" class="absolute inset-0 flex items-center justify-center bg-[#1C1F26]/80">
+                <div class="loader"></div>
+            </div>
+        </div>
+    </main>
+
+    <!-- 底部 -->
+    <footer class="border-t border-[#2a2d35] py-6">
+        <div class="max-w-7xl mx-auto px-4 text-center text-xs text-gray-500">
+            <p>数据来源：<span x-text="dataSource === 'basescan' ? 'Basescan API' : 'Base 生态数据模拟'"></span></p>
+            <p class="mt-1">Base 公链生态项目 Gas 消耗分析看板 · Built with ❤️</p>
+        </div>
+    </footer>
+
+    <script>
+        const CATEGORY_COLORS = {
+            'DEX': '#0052FF', 'Lending': '#00D395', 'Stablecoin': '#FF6B6B', 'Asset': '#FFD93D',
+            'Bridge': '#8456FF', 'NFT': '#FF5722', 'Social': '#E91E63', 'Infra': '#607D8B',
+            'Gaming': '#9C27B0', 'Yield': '#4CAF50', 'Perp DEX': '#FF9800', 'DeFi': '#2196F3',
+            'Uncategorized': '#666',
+        };
+        
+        function dashboard() {
+            return {
+                loading: true,
+                trendLoaded: false,
+                lastUpdate: '',
+                currentDate: new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' }),
+                dataSource: 'Base 生态数据',
+                totalRankings: [],
+                dailyRankings: [],
+                categoryStats: [],
+                trendRange: '近 30 天',
+                trendChart: null,
+                
+                statCards: {
+                    gas: { label: '总 Gas 消耗', value: 0, icon: 'M13 2L3 14h9l-1 8 10-12h-9l1-8z', color: '#0052FF', bg: '#0052FF20' },
+                    txs: { label: '总交易数', value: 0, icon: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z', color: '#00D395', bg: '#00D39520' },
+                    projects: { label: '活跃项目', value: 0, icon: 'M19 21V5a2 2 0 00-2-2H6a2 2 0 00-2 2v16M10 17l5-5m0 0l-5-5m5 5H6', color: '#8456FF', bg: '#8456FF20' },
+                    dailyGas: { label: '昨日 Gas', value: 0, icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z', color: '#FF9800', bg: '#FF980020' },
+                },
+                
+                async init() {
+                    await this.refreshData();
+                    setInterval(() => this.refreshData(), 300000);
+                },
+                
+                getCategoryColor(cat) { return CATEGORY_COLORS[cat] || '#666'; },
+                
+                async refreshData() {
+                    this.loading = true;
+                    try {
+                        const [totalRes, dailyRes, catRes, trendRes] = await Promise.all([
+                            fetch('/api/gas-stats/total?limit=50'),
+                            fetch('/api/gas-stats/daily?limit=50'),
+                            fetch('/api/gas-stats/by-category'),
+                            fetch('/api/gas-stats/trend?days=30'),
+                        ]);
+                        
+                        this.totalRankings = await totalRes.json();
+                        this.dailyRankings = await dailyRes.json();
+                        this.categoryStats = await catRes.json();
+                        const trendData = await trendRes.json();
+                        
+                        // 更新统计卡片
+                        this.statCards.gas.value = this.totalRankings.reduce((s, i) => s + (i.total_gas_used||0), 0);
+                        this.statCards.txs.value = this.totalRankings.reduce((s, i) => s + (i.total_tx_count||0), 0);
+                        this.statCards.projects.value = this.totalRankings.filter(i => (i.total_gas_used||0) > 0).length;
+                        this.statCards.dailyGas.value = this.dailyRankings.reduce((s, i) => s + (i.daily_gas_used||0), 0);
+                        
+                        // 渲染趋势图
+                        this.renderTrendChart(trendData);
+                        
+                        this.lastUpdate = new Date().toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                    } catch(e) {
+                        console.error('加载失败:', e);
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+                
+                renderTrendChart(data) {
+                    this.trendLoaded = false;
+                    const canvas = document.getElementById('trendChart');
+                    if (!canvas || !data || data.length === 0) return;
+                    
+                    if (this.trendChart) { this.trendChart.destroy(); }
+                    
+                    const dates = data.map(d => d.date.slice(5));
+                    const gasValues = data.map(d => d.total_gas_used);
+                    const txValues = data.map(d => d.total_tx_count);
+                    
+                    this.trendChart = new Chart(canvas, {
+                        type: 'line',
+                        data: {
+                            labels: dates,
+                            datasets: [
+                                {
+                                    label: 'Gas 消耗',
+                                    data: gasValues,
+                                    borderColor: '#0052FF',
+                                    backgroundColor: 'rgba(0,82,255,0.1)',
+                                    fill: true,
+                                    tension: 0.4,
+                                    borderWidth: 2,
+                                    pointRadius: 0,
+                                    pointHitRadius: 10,
+                                    yAxisID: 'y',
+                                },
+                                {
+                                    label: '交易数',
+                                    data: txValues,
+                                    borderColor: '#00D395',
+                                    backgroundColor: 'rgba(0,211,149,0.1)',
+                                    fill: true,
+                                    tension: 0.4,
+                                    borderWidth: 2,
+                                    pointRadius: 0,
+                                    pointHitRadius: 10,
+                                    yAxisID: 'y1',
+                                }
+                            ]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            interaction: { intersect: false, mode: 'index' },
+                            plugins: {
+                                legend: {
+                                    labels: { color: '#999', usePointStyle: true, padding: 20, font: { size: 12 } }
+                                },
+                                tooltip: {
+                                    backgroundColor: '#1C1F26',
+                                    titleColor: '#fff',
+                                    bodyColor: '#ccc',
+                                    borderColor: '#2a2d35',
+                                    borderWidth: 1,
+                                    callbacks: {
+                                        label: function(ctx) {
+                                            if (ctx.dataset.label === 'Gas 消耗') {
+                                                return ctx.dataset.label + ': ' + new Intl.NumberFormat().format(ctx.raw) + ' Gas';
+                                            }
+                                            return ctx.dataset.label + ': ' + new Intl.NumberFormat().format(ctx.raw);
+                                        }
+                                    }
+                                }
+                            },
+                            scales: {
+                                x: {
+                                    ticks: { color: '#666', maxTicksLimit: 10, font: { size: 11 } },
+                                    grid: { color: '#2a2d35' },
+                                },
+                                y: {
+                                    type: 'linear',
+                                    display: true,
+                                    position: 'left',
+                                    ticks: { color: '#666', font: { size: 11 }, callback: v => new Intl.NumberFormat('zh-CN', { notation: 'compact' }).format(v) },
+                                    grid: { color: '#2a2d35' },
+                                },
+                                y1: {
+                                    type: 'linear',
+                                    display: false,
+                                    position: 'right',
+                                    grid: { drawOnChartArea: false },
+                                }
+                            }
+                        }
+                    });
+                    this.trendLoaded = true;
+                },
+                
+                formatNumber(num) {
+                    if (!num || num === 0) return '0';
+                    return new Intl.NumberFormat('zh-CN', { 
+                        notation: num >= 1e8 ? 'compact' : 'standard',
+                        maximumFractionDigits: 2 
+                    }).format(num);
+                }
+            }
+        }
+    </script>
+</body>
+</html>
