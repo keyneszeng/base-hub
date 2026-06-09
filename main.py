@@ -105,10 +105,20 @@ async def periodic_data_fetch():
         try:
             # 尝试链上数据
             oc = get_onchain()
-            if oc.is_connected():
-                await fetch_onchain_data()
+            if oc and oc.is_connected():
+                print(f"[{datetime.now()}] 🔗 开始链上数据扫描...")
+                onchain_stats = oc.scan_blocks(count=50)
+                if onchain_stats:
+                    for stat in onchain_stats:
+                        await db.update_gas_stats(stat)
+                    cache["total_rankings"] = onchain_stats
+                    cache["daily_rankings"] = onchain_stats
+                    cache["data_source"] = "onchain"
+                    cache["last_update"] = datetime.now()
+                    print(f"✅ 链上数据更新: {len(onchain_stats)} 个合约")
+                else:
+                    await load_mock_data()
             else:
-                # 回退到模拟数据
                 await load_mock_data()
             print(f"[{datetime.now()}] 数据更新完成")
         except Exception as e:
@@ -120,15 +130,14 @@ async def fetch_onchain_data():
     global cache
     
     oc = get_onchain()
-    if not oc.is_connected():
+    if not oc or not oc.is_connected():
         print("⚠️  Base 主网 RPC 不可用，使用模拟数据")
         await load_mock_data()
         return
     
     print(f"🔗 正在从 Base 主网获取实时数据...")
-    
-    # 扫描最近 20 个区块（首次快速扫描）
-    onchain_stats = oc.scan_blocks(count=20)
+    # scan_blocks 很快（纯 httpx），直接在 async task 里跑
+    onchain_stats = oc.scan_blocks(count=10)
     
     # 保存到数据库
     for stat in onchain_stats:

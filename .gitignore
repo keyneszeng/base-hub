@@ -15,7 +15,9 @@ venv/
 .idea/
 .vscode/
 *.swp
-*.swo
 
-# 项目临时文件
+# Vercel
+.vercel/
+
+# 项目临时
 server.log
