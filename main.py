@@ -16,6 +16,10 @@ import database as db
 from data_fetcher import fetch_all_projects_gas_data
 from mock_data import generate_historical_gas_data, generate_aggregated_stats
 from onchain import OnChainFetcher
+from wallet import analyze_wallet
+
+# 用户钱包地址（在 .env 中配置或默认）
+USER_WALLET = os.getenv("USER_WALLET", "0xc2893a33ca7d0884c245ac0a7a2045272620d11f")
 
 load_dotenv()
 
@@ -337,6 +341,21 @@ async def get_network_stats():
     stats = oc.get_network_overview(count=50)
     cache["network_stats"] = stats
     return stats
+
+
+@app.get("/api/wallet/{address}")
+async def get_wallet_stats(address: str, blocks: int = Query(100, ge=20, le=500)):
+    """获取指定钱包的 Gas 消耗分析"""
+    # 在线程中分析（可能耗时几秒）
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, analyze_wallet, address, min(blocks, 200))
+    return result
+
+
+@app.get("/api/my-wallet")
+async def get_my_wallet():
+    """获取项目关联钱包的 Gas 分析"""
+    return await get_wallet_stats(USER_WALLET, blocks=100)
 
 
 if __name__ == "__main__":

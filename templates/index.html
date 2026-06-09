@@ -194,6 +194,65 @@
                 <div class="loader"></div>
             </div>
         </div>
+
+        <!-- 💰 我的钱包 -->
+        <div class="card p-4 sm:p-5 mb-6 fade-in">
+            <div class="flex items-center justify-between mb-4">
+                <div class="flex items-center gap-2">
+                    <h3 class="text-sm font-semibold">💰 我的钱包</h3>
+                    <a :href="'https://basescan.org/address/' + walletAddress" target="_blank" 
+                       class="text-xs text-gray-400 hover:text-base-blue" x-text="walletAddress.slice(0,10)+'...'"></a>
+                </div>
+                <button @click="loadWallet()" :disabled="walletLoading"
+                        class="text-xs px-3 py-1 bg-base-blue/20 hover:bg-base-blue/40 text-base-blue rounded-lg transition-colors">
+                    <span x-text="walletLoading ? '分析中...' : '🔄 刷新'"></span>
+                </button>
+            </div>
+            
+            <div x-show="walletLoading" class="flex justify-center py-8">
+                <div class="loader"></div>
+            </div>
+            
+            <div x-show="!walletLoading && walletData" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                <div class="text-center p-3 rounded-xl bg-[#0A0B0D]">
+                    <p class="text-xl font-bold gas-value text-blue-400" x-text="formatNumber(walletData.total_gas_used)"></p>
+                    <p class="text-xs text-gray-500 mt-1">总 Gas 消耗</p>
+                </div>
+                <div class="text-center p-3 rounded-xl bg-[#0A0B0D]">
+                    <p class="text-xl font-bold gas-value text-emerald-400" x-text="walletData.total_tx_count"></p>
+                    <p class="text-xs text-gray-500 mt-1">总交易数</p>
+                </div>
+                <div class="text-center p-3 rounded-xl bg-[#0A0B0D]">
+                    <p class="text-xl font-bold gas-value text-purple-400" x-text="walletData.total_spent_eth + ' ETH'"></p>
+                    <p class="text-xs text-gray-500 mt-1">Gas 花费</p>
+                </div>
+                <div class="text-center p-3 rounded-xl bg-[#0A0B0D]">
+                    <p class="text-xl font-bold gas-value text-orange-400" x-text="walletData.project_count"></p>
+                    <p class="text-xs text-gray-500 mt-1">互动项目</p>
+                </div>
+            </div>
+            
+            <div x-show="!walletLoading && walletData && walletData.top_projects.length > 0" class="space-y-2">
+                <p class="text-xs text-gray-500 mb-2">📋 项目互动排行</p>
+                <template x-for="(p, idx) in walletData.top_projects.slice(0, 6)" :key="p.project">
+                    <div class="flex items-center justify-between py-1.5 px-3 rounded-lg hover:bg-white/5 transition-colors">
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs text-gray-500 w-5" x-text="idx+1"></span>
+                            <span class="text-sm" x-text="p.project"></span>
+                        </div>
+                        <div class="flex items-center gap-4">
+                            <span class="text-xs text-blue-400 gas-value" x-text="formatNumber(p.gas) + ' Gas'"></span>
+                            <span class="text-xs text-gray-500" x-text="p.tx_count + ' txs'"></span>
+                        </div>
+                    </div>
+                </template>
+            </div>
+            
+            <div x-show="!walletLoading && walletData && walletData.total_tx_count === 0" class="text-center py-4 text-gray-500 text-sm">
+                该钱包最近暂无链上交易<br>
+                <span class="text-xs">扫描了最近 {{ walletData.blocks_scanned || 100 }} 个区块</span>
+            </div>
+        </div>
     </main>
 
     <!-- 底部 -->
@@ -224,6 +283,9 @@
                 categoryStats: [],
                 trendRange: '近 30 天',
                 trendChart: null,
+                walletAddress: '0xc289...d11f',
+                walletData: null,
+                walletLoading: false,
                 
                 statCards: {
                     gas: { label: '总 Gas 消耗', value: 0, icon: 'M13 2L3 14h9l-1 8 10-12h-9l1-8z', color: '#0052FF', bg: '#0052FF20' },
@@ -234,6 +296,7 @@
                 
                 async init() {
                     await this.refreshData();
+                    this.loadWallet();  // 后台加载钱包数据（不阻塞页面）
                     setInterval(() => this.refreshData(), 300000);
                 },
                 
@@ -367,6 +430,19 @@
                         notation: num >= 1e8 ? 'compact' : 'standard',
                         maximumFractionDigits: 2 
                     }).format(num);
+                },
+                
+                async loadWallet() {
+                    this.walletLoading = true;
+                    try {
+                        const res = await fetch('/api/my-wallet');
+                        this.walletData = await res.json();
+                        this.walletAddress = this.walletData.address || '0xc2893a33ca7d0884c245ac0a7a2045272620d11f';
+                    } catch(e) {
+                        console.error('Wallet load error:', e);
+                    } finally {
+                        this.walletLoading = false;
+                    }
                 }
             }
         }
